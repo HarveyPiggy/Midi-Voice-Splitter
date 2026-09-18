@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIDI 声部分离器 · 多声部拆成单音轨</title>
+<meta name="description" content="上传 MIDI 文件，按旋律与声部关系自动拆成多个音轨，每个音轨同一时刻只有一个音符。全程在浏览器本地完成，文件不上传。">
+<meta name="theme-color" content="#0e1116">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230e1116'/><g fill='%235b9cff'><rect x='6' y='7' width='15' height='4' rx='2'/><rect x='6' y='14' width='20' height='4' rx='2'/><rect x='6' y='21' width='11' height='4' rx='2'/></g></svg>">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="MIDI 声部分离器">
+<meta property="og:title" content="MIDI 声部分离器 · 多声部拆成单音轨">
+<meta property="og:description" content="上传 MIDI 文件，按旋律与声部关系自动拆成多个单音轨并导出。全程浏览器本地处理，文件不上传。">
+<meta name="twitter:card" content="summary">
+<meta property="og:url" content="https://harveypiggy.github.io/Midi-Voice-Splitter/">
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1b222c; --line:#2a323d;
+    --text:#e6edf3; --muted:#8b98a5; --accent:#5b9cff; --accent2:#a78bfa;
+    --ok:#3ddc97; --warn:#ffb454; --err:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text); font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    padding:28px 20px 60px;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.5px}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  .card h2{font-size:14px;margin:0 0 14px;color:var(--text);display:flex;align-items:center;gap:8px}
+  .card h2::before{content:"";width:3px;height:14px;background:var(--accent);border-radius:2px}
+
+  /* 上传区 */
+  #drop{
+    border:2px dashed #33404f;border-radius:14px;padding:34px 20px;text-align:center;
+    background:var(--panel2);cursor:pointer;transition:.15s;
+  }
+  #drop:hover,#drop.over{border-color:var(--accent);background:#1a2431}
+  #drop .big{font-size:15px;margin-bottom:6px}
+  #drop .sm{color:var(--muted);font-size:12.5px}
+  #file{display:none}
+
+  /* 参数 */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+  .field{display:flex;flex-direction:column;gap:6px}
+  label.lb{font-size:12.5px;color:var(--muted)}
+  select,input[type=number]{
+    background:var(--panel2);border:1px solid var(--line);color:var(--text);
+    border-radius:9px;padding:8px 10px;font-size:13px;outline:none;width:100%
+  }
+  select:focus,input:focus{border-color:var(--accent)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .row{display:flex;align-items:center;gap:10px}
+  .row .val{font-variant-numeric:tabular-nums;color:var(--accent);min-width:52px;text-align:right;font-size:12.5px}
+  .chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);cursor:pointer;user-select:none}
+  .chk input{accent-color:var(--accent);width:15px;height:15px}
+  .hint{font-size:11.5px;color:#6b7885;line-height:1.5}
+
+  /* 按钮 */
+  .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  button{
+    background:var(--accent);color:#08111f;border:0;border-radius:10px;padding:10px 18px;
+    font-size:13.5px;font-weight:600;cursor:pointer;transition:.15s
+  }
+  button:hover{filter:brightness(1.1)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  button.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  button.sm{padding:5px 11px;font-size:12px;border-radius:8px}
+
+  /* 统计 */
+  .chips{display:flex;flex-wrap:wrap;gap:10px}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 13px;font-size:12.5px;color:var(--muted)}
+  .chip b{color:var(--text);font-size:14px;font-weight:600;margin-left:5px;font-variant-numeric:tabular-nums}
+  .banner{border-radius:10px;padding:11px 14px;font-size:13px;margin-bottom:14px;display:flex;gap:8px;align-items:flex-start}
+  .banner.ok{background:rgba(61,220,151,.1);border:1px solid rgba(61,220,151,.35);color:#9df3cb}
+  .banner.warn{background:rgba(255,180,84,.1);border:1px solid rgba(255,180,84,.35);color:#ffd9a3}
+  .banner.err{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.35);color:#ffc2c2}
+  .banner.hide{display:none}
+
+  /* 钢琴卷帘 */
+  .rollwrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:#0b0f14}
+  canvas{display:block}
+  .rollinner{position:relative;display:inline-block;vertical-align:top}
+  #playhead{position:absolute;left:0;top:0;pointer-events:none}
+  .rollhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px}
+
+  /* 走带控件 */
+  .transport{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--panel2);
+    border:1px solid var(--line);border-radius:12px;padding:11px 14px;margin:16px 0 4px}
+  .transport .time{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted);min-width:52px}
+  #seek{flex:1;min-width:200px;accent-color:var(--accent2)}
+  .tbtn{background:var(--accent);color:#08111f;border:0;border-radius:9px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer}
+  .tbtn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:500}
+  .tbtn.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  .mbtn{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:7px;padding:3px 9px;font-size:12px;cursor:pointer}
+  .mbtn.on{background:rgba(255,107,107,.15);border-color:rgba(255,107,107,.5);color:var(--err)}
+  .mbtn.solo-on{background:rgba(167,139,250,.16);border-color:rgba(167,139,250,.55);color:var(--accent2)}
+
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500;font-size:12px;white-space:nowrap}
+  td{font-variant-numeric:tabular-nums}
+  .mono-ok{color:var(--ok);font-weight:600}
+  .mono-bad{color:var(--err);font-weight:600}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:7px;vertical-align:middle}
+  .tag{font-size:11px;color:#6b7885;border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:4px}
+  .fname{color:var(--muted);font-size:12.5px;margin-top:8px}
+  .fname b{color:var(--text)}
+  footer{color:#5c6875;font-size:12px;text-align:center;margin-top:34px;line-height:1.8}
+  code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12px;color:#c8d3de}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MIDI <span>声部分离器</span></h1>
+  <div class="sub">上传 MIDI → 按旋律/声部关系拆成多个音轨 → 在线试听（内置钢琴合成音色）→ 导出 MIDI。输出的每个音轨在同一时刻最多只有一个音符在响（单音轨）。全部在浏览器本地完成，不联网、不上传任何数据。</div>
+
+  <div class="card">
+    <h2>1 · 输入</h2>
+    <div id="drop">
+      <div class="big">点击选择 .mid / .midi 文件，或拖到这里</div>
+      <div class="sm">支持 SMF format 0 / 1 / 2，也可以先点下方「载入示例」试试</div>
+    </div>
+    <input type="file" id="file" accept=".mid,.midi,audio/midi">
+    <div class="fname" id="fname"></div>
+  </div>
+
+  <div class="card">
+    <h2>2 · 分离参数</h2>
+    <div class="grid">
+      <div class="field">
+        <label class="lb">分离模式</label>
+        <select id="mode">
+          <option value="auto">自动声部分离（声部进行 + 不交叉）</option>
+          <option value="channel">按 MIDI 通道分离</option>
+          <option value="range">按音高区间分离（高/中/低）</option>
+        </select>
+        <div class="hint">自动模式：按起始时刻分组，用动态规划做单调匹配，高声部始终在上，和弦必然被拆到不同轨。</div>
+      </div>
+
+      <div class="field">
+        <label class="lb">打击乐（通道 10）</label>
+        <select id="drumMode">
+          <option value="split">也拆成单音轨（推荐）</option>
+          <option value="separate">单独一轨，保持原样（会破坏单音保证）</option>
+          <option value="drop">忽略打击乐</option>
+        </select>
+        <div class="hint">鼓组天然同时发声，若要求全部音轨严格单音，请选择第一项。</div>
+      </div>
+
+      <div class="field">
+        <label class="lb">最大输出音轨数</label>
+        <input type="number" id="maxTracks" value="16" min="1" max="32">
+        <div class="hint">超出时音符最少的声部会并入音高最接近的邻轨，冲突处会截断或丢弃音符。</div>
+      </div>
+
+      <div class="field">
+        <label class="lb">最短音符时长（ms）</label>
+        <input type="number" id="minDurMs" value="0" min="0" max="2000">
+        <div class="hint">过短的音符会被拉长到该值，避免导出后出现听不见的碎音。</div>
+      </div>
+
+      <div class="field">
+        <label class="lb">同轨音符最小间隔（ms）</label>
+        <input type="number" id="gapMs" value="0" min="0" max="500">
+        <div class="hint">设置后相邻音符之间留出空隙，前一个音符会被截断。</div>
+      </div>
+
+      <div class="field">
+        <label class="lb">新建声部惩罚：<span id="nvVal">6</span> 半音</label>
+        <div class="row"><input type="range" id="nv" min="0" max="24" value="6" step="1"><span class="val" id="nvVal2">6</span></div>
+        <div class="hint">调大 → 更倾向复用已有声部（轨数少，但音程跳动大）；调小 → 更容易开新声部（轨数多，旋律更连贯）。</div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <label class="chk"><input type="checkbox" id="groupByChannel" checked> 保持乐器归属：先按通道分组，再在组内做声部分离</label>
+    </div>
+
+    <div class="btns">
+      <button id="run" disabled>开始分离</button>
+      <button class="ghost" id="demo">载入示例</button>
+      <button class="ghost" id="reset" disabled>清空</button>
+    </div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none">
+    <h2>3 · 结果</h2>
+    <div class="banner hide" id="banner"></div>
+
+    <div class="chips" id="chips"></div>
+
+    <div class="transport">
+      <button class="tbtn" id="pp">▶ 播放</button>
+      <button class="tbtn ghost" id="stopBtn">⏹ 停止</button>
+      <span class="time" id="tpos">0:00</span>
+      <input type="range" id="seek" min="0" max="1000" step="1" value="0">
+      <span class="time" id="tdur">0:00</span>
+      <select id="rate" style="width:82px">
+        <option value="0.5">0.5x</option>
+        <option value="0.75">0.75x</option>
+        <option value="1" selected>1.0x</option>
+        <option value="1.25">1.25x</option>
+        <option value="1.5">1.5x</option>
+      </select>
+      <label class="lb" style="margin:0">音量</label>
+      <input type="range" id="vol" min="0" max="1" step="0.01" value="0.85" style="width:90px">
+      <label class="chk"><input type="checkbox" id="loop"> 循环</label>
+      <label class="chk"><input type="checkbox" id="drumAudio" checked> 打击乐试听</label>
+      <div class="hint" style="flex-basis:100%;margin-top:-4px">
+        试听为离线合成：非打击乐轨统一用内置钢琴音色（与原始音色无关，只用来确认声部拆分是否正确）；打击乐轨为极简合成音色，可关闭。
+      </div>
+    </div>
+
+    <div style="margin:18px 0 6px">
+      <div class="rollhead">
+        <div style="font-size:13px;color:var(--muted)">钢琴卷帘：第一行为输入（按通道着色），其余为输出的每个音轨</div>
+        <div class="row" style="justify-content:flex-end">
+          <label class="lb" style="margin:0">横向缩放</label>
+          <input type="range" id="zoom" min="1" max="10" step="0.5" value="1" style="width:130px">
+          <span class="val" id="zoomVal">1.0x</span>
+        </div>
+      </div>
+      <div class="rollwrap"><div class="rollinner">
+        <canvas id="roll"></canvas><canvas id="playhead"></canvas>
+      </div></div>
+    </div>
+
+    <div style="margin-top:20px">
+      <table>
+        <thead><tr>
+          <th>音轨</th><th>通道</th><th>乐器</th><th>音符数</th><th>音域</th><th>平均音高</th><th>同时最大音符</th><th>单音校验</th><th>试听</th><th></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="btns"><button id="dlAll">下载分离后的 MIDI（全部音轨）</button></div>
+    </div>
+  </div>
+
+  <footer>
+    算法：起始时刻分组 → 单调匹配（voice leading）动态规划 → 单音化校验 → SMF 重写。<br>
+    试听由 Web Audio 实时合成（钢琴音色为谐波加法合成 + 击槌瞬态 + 轻微房间混响），不加载任何外部音色文件，可完全离线使用。<br>
+    所有处理都在你的浏览器里完成，文件不会离开本机。
+  </footer>
+</div>
+
+<script src="midi-core.js"></script>
+<script src="synth.js"></script>
+<script>
+(function(){
+  'use strict';
+  const C = window.MidiCore;
+  const S = window.Synth;
+  const $ = id => document.getElementById(id);
+
+  const state = { fileName:null, info:null, result:null, midiBytes:null, maxTick:0, roll:null, seeking:false };
+
+  /* ---------- 播放器 ---------- */
+  const engine = new S.SynthEngine();
+  const player = new S.MidiPlayer(engine);
+  player.onState = () => {
+    $('pp').textContent = player.playing ? '⏸ 暂停' : '▶ 播放';
+    if (!player.playing && player.dur) {
+      const p = Math.min(player.dur, Math.max(0, player.position()));
+      $('tpos').textContent = fmtTime(p);
+      $('seek').value = String(Math.round(p / player.dur * 1000));
+      drawPlayhead(p);
+    }
+  };
+
+  /* ---------- 输入 ---------- */
+  const drop = $('drop'), fileInput = $('file');
+  drop.onclick = () => fileInput.click();
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = e => {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  };
+  fileInput.onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0]); };
+
+  function loadFile(f) {
+    const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const parsed = C.parseMidi(fr.result);
+        state.info = C.extractNotes(parsed);
+        state.fileName = f.name;
+        $('fname').innerHTML = `已载入 <b>${escapeHtml(f.name)}</b> · format ${parsed.format} · ` +
+          `PPQ ${state.info.division} · ${state.info.trackNames.length} 轨 · ${state.info.notes.length} 音符`;
+        $('run').disabled = false;
+        $('reset').disabled = false;
+        run();
+      } catch (err) {
+        $('fname').innerHTML = `<span style="color:var(--err)">解析失败：${escapeHtml(err.message)}</span>`;
+      }
+    };
+    fr.readAsArrayBuffer(f);
+  }
+
+  $('demo').onclick = () => {
+    const bytes = C.generateDemo();
+    const parsed = C.parseMidi(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    state.info = C.extractNotes(parsed);
+    state.fileName = 'demo.mid';
+    $('fname').innerHTML = `已载入 <b>内置示例 demo.mid</b> · 4 轨（旋律 / 和弦 / 贝斯 / 鼓）· ${state.info.notes.length} 音符`;
+    $('run').disabled = false;
+    $('reset').disabled = false;
+    run();
+  };
+
+  $('reset').onclick = () => {
+    state.info = null; state.result = null; state.fileName = null;
+    $('fname').innerHTML = ''; $('resultCard').style.display = 'none';
+    $('run').disabled = true; $('reset').disabled = true;
+  };
+
+  /* ---------- 参数联动 ---------- */
+  $('nv').oninput = () => { $('nvVal').textContent = $('nv').value; $('nvVal2').textContent = $('nv').value; };
+  $('zoom').oninput = () => { $('zoomVal').textContent = parseFloat($('zoom').value).toFixed(1) + 'x'; if (state.result) drawRoll(); };
+  ['mode','drumMode','maxTracks','minDurMs','gapMs','groupByChannel'].forEach(id => {
+    $(id).onchange = () => { if (state.info) run(); };
+  });
+  $('mode').onchange = () => {
+    $('groupByChannel').disabled = ($('mode').value !== 'auto');
+    if (state.info) run();
+  };
+
+  /* ---------- 执行分离 ---------- */
+  function run() {
+    if (!state.info) return;
+    const opts = {
+      mode: $('mode').value,
+      groupByChannel: $('groupByChannel').checked && $('mode').value === 'auto',
+      drumMode: $('drumMode').value,
+      maxTracks: Math.max(1, parseInt($('maxTracks').value) || 16),
+      newVoicePenalty: parseInt($('nv').value) || 0,
+      gapMs: Math.max(0, parseFloat($('gapMs').value) || 0),
+      minDurMs: Math.max(0, parseFloat($('minDurMs').value) || 0)
+    };
+    let res;
+    try {
+      res = C.separate(state.info, opts);
+    } catch (err) {
+      showBanner('err', '分离失败：' + err.message);
+      return;
+    }
+    state.result = res;
+    state.maxTick = state.info.maxTick;
+    state.midiBytes = C.buildMidi({
+      division: state.info.division,
+      tempos: state.info.tempos,
+      timeSigs: state.info.timeSigs,
+      keySigs: state.info.keySigs,
+      tracks: res.tracks.map(t => ({ name:t.name, ch:t.ch, program:t.program, notes:t.notes, drum:t.drum }))
+    });
+
+    $('resultCard').style.display = 'block';
+    renderStats(res);
+    renderTable(res);
+    drawRoll();
+
+    // 试听素材（用输出音轨）
+    const clock = res.clock;
+    player.setMaterial(res.tracks, tick => clock.toMs(tick) / 1000, state.maxTick);
+    const d = player.dur;
+    $('tdur').textContent = fmtTime(d);
+    $('seek').max = '1000';
+    $('tpos').textContent = '0:00';
+    $('seek').value = '0';
+    drawPlayhead(-1);
+  }
+
+  function fmtTime(s) {
+    if (!isFinite(s) || s < 0) s = 0;
+    const m = Math.floor(s / 60);
+    return m + ':' + ('0' + Math.floor(s % 60)).slice(-2);
+  }
+
+  function showBanner(kind, msg) {
+    const b = $('banner');
+    b.className = 'banner ' + kind;
+    b.innerHTML = msg;
+    $('resultCard').style.display = 'block';
+  }
+
+  /* ---------- 统计 ---------- */
+  function renderStats(res) {
+    const s = res.stats;
+    const dur = res.clock.toMs(state.maxTick) / 1000;
+    const mm = Math.floor(dur / 60), ss = (dur % 60).toFixed(1).padStart(4, '0');
+    const tps = state.info.tempos || [];
+    const bpmOf = t => (60000000 / (t.mpqn || 500000));
+    const bpmList = tps.map(t => (Math.round(bpmOf(t) * 10) / 10).toString());
+    const bpmText = bpmList.length <= 1
+      ? (bpmList[0] || '120') + ' BPM'
+      : (bpmList.length <= 8 ? bpmList.join(' → ') + ' BPM' : `${bpmList.length} 段：${bpmList[0]} → … → ${bpmList[bpmList.length - 1]} BPM`);
+
+    $('chips').innerHTML = [
+      ['输入音符', s.inputNotes],
+      ['输入最大同时发音', s.inputMaxPolyphony],
+      ['输出音轨', s.outputTracks],
+      ['输出音符', s.outputNotes],
+      ['丢失音符', s.dropped],
+      ['时长', `${mm}:${ss}`],
+      ['速度变化点', tps.length],
+      ['速度（已写入输出）', bpmText]
+    ].map(([k, v]) => `<div class="chip">${k}<b>${v}</b></div>`).join('');
+
+    const b = $('banner');
+    b.className = 'banner';
+    if (!s.allMono) {
+      b.classList.add('warn');
+      b.innerHTML = '⚠ 存在非单音音轨（通常是打击乐轨）。要严格保证「每轨同时只有一个音符」，请把打击乐设为「也拆成单音轨」。';
+    } else if (s.dropped > 0) {
+      b.classList.add('warn');
+      b.innerHTML = `✓ 所有音轨均为单音，但有 <b>${s.dropped}</b> 个音符因音轨数上限被丢弃。提高「最大输出音轨数」可减少丢失。`;
+    } else {
+      b.classList.add('ok');
+      b.innerHTML = `✓ 校验通过：${s.outputTracks} 个音轨，每个音轨任意时刻最多 1 个音符，音符零丢失。`;
+    }
+  }
+
+  /* ---------- 音轨表 ---------- */
+  function renderTable(res) {
+    const tb = $('tbody');
+    tb.innerHTML = '';
+    const pitchedCount = res.tracks.filter(t => !t.drum).length;
+    let pIdx = 0;
+    res.tracks.forEach((t, i) => {
+      const color = laneColor(i);
+      const inst = t.drum ? '打击乐' : (C.GM_NAMES[t.program] || ('音色 ' + t.program));
+      const poly = C.maxConcurrent(t.notes);
+      let tag = '';
+      if (!t.drum) {
+        pIdx++;
+        if (pIdx === 1) tag = '<span class="tag" style="color:var(--accent2)">主旋律候选</span>';
+        else if (pIdx === pitchedCount) tag = '<span class="tag">最低声部</span>';
+      }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><span class="dot" style="background:${color}"></span>${escapeHtml(t.name)} ${tag}</td>
+        <td>${t.ch + 1}</td>
+        <td>${escapeHtml(inst)}</td>
+        <td>${t.notes.length}</td>
+        <td>${C.pitchName(t.lo)} – ${C.pitchName(t.hi)}</td>
+        <td>${C.pitchName(Math.round(t.avg))}</td>
+        <td>${poly}</td>
+        <td class="${t.mono ? 'mono-ok' : 'mono-bad'}">${t.mono ? '✓ 单音' : '✗ 有重叠'}</td>
+        <td>
+          <button class="mbtn" data-i="${i}" data-act="mute">静音</button>
+          <button class="mbtn" data-i="${i}" data-act="solo">独奏</button>
+        </td>
+        <td><button class="ghost sm" data-i="${i}">下载此轨</button></td>`;
+      tb.appendChild(tr);
+    });
+    tb.querySelectorAll('button[data-i]').forEach(btn => {
+      btn.onclick = () => {
+        const i = +btn.dataset.i, t = res.tracks[i];
+        if (btn.dataset.act === 'mute') {
+          player.mute.has(i) ? player.mute.delete(i) : player.mute.add(i);
+          syncTrackBtns();
+        } else if (btn.dataset.act === 'solo') {
+          player.solo.has(i) ? player.solo.delete(i) : player.solo.add(i);
+          syncTrackBtns();
+        } else {
+          const bytes = C.buildMidi({
+            division: state.info.division, tempos: state.info.tempos,
+            timeSigs: state.info.timeSigs, keySigs: state.info.keySigs,
+            tracks: [{ name: t.name, ch: t.ch, program: t.program, notes: t.notes, drum: t.drum }]
+          });
+          save(bytes, baseName() + '_' + t.name.replace(/\s+/g, '') + '.mid');
+        }
+      };
+    });
+    syncTrackBtns();
+  }
+
+  function syncTrackBtns() {
+    document.querySelectorAll('#tbody button[data-act]').forEach(b => {
+      const i = +b.dataset.i;
+      const on = b.dataset.act === 'mute' ? player.mute.has(i) : player.solo.has(i);
+      b.classList.toggle('on', b.dataset.act === 'mute' && on);
+      b.classList.toggle('solo-on', b.dataset.act === 'solo' && on);
+    });
+  }
+
+  /* ---------- 走带控件 ---------- */
+  $('pp').onclick = () => {
+    try { engine.ensure(); } catch (e) { showBanner('err', '无法启动音频：' + e.message); return; }
+    player.playing ? player.pause() : player.play();
+  };
+  $('stopBtn').onclick = () => player.stop();
+  $('loop').onchange = () => { player.loop = $('loop').checked; };
+  $('drumAudio').onchange = () => { engine.setDrums($('drumAudio').checked); };
+  $('vol').oninput = () => engine.setVolume(parseFloat($('vol').value));
+  $('rate').onchange = () => {
+    const pos = player.position();
+    const was = player.playing;
+    player._halt();
+    player.rate = parseFloat($('rate').value);
+    player.offset = pos;
+    player.idx = player._seekIndex(pos);
+    if (was) player.play();
+  };
+  $('seek').oninput = () => {
+    state.seeking = true;
+    const p = (parseFloat($('seek').value) / 1000) * player.dur;
+    $('tpos').textContent = fmtTime(p);
+    if (state.result) drawPlayhead(p);
+  };
+  $('seek').onchange = () => {
+    const p = (parseFloat($('seek').value) / 1000) * player.dur;
+    player.seek(p);
+    setTimeout(() => { state.seeking = false; }, 60);
+  };
+
+  /* 播放中更新进度条与播放头 */
+  (function loopUI() {
+    if (player.playing) {
+      /* 钳位到 [0, dur]：AudioContext 时钟未对齐时 position() 可能为负，避免出现 -1:-1 */
+      const p = Math.min(player.dur, Math.max(0, player.position()));
+      if (!state.seeking) $('seek').value = String(Math.round(p / player.dur * 1000));
+      $('tpos').textContent = fmtTime(p);
+      drawPlayhead(p);
+    }
+    const raf = window.requestAnimationFrame;
+    if (raf) raf(loopUI); else setTimeout(loopUI, 80);
+  })();
+
+  $('dlAll').onclick = () => {
+    if (state.midiBytes) save(state.midiBytes, baseName() + '_split.mid');
+  };
+
+  function baseName() {
+    return (state.fileName || 'output').replace(/\.(mid|midi)$/i, '');
+  }
+  function save(bytes, name) {
+    const blob = new Blob([bytes], { type: 'audio/midi' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  }
+
+  /* ---------- 钢琴卷帘 ---------- */
+  function laneColor(i) {
+    const hues = [210, 275, 150, 40, 330, 190, 95, 20, 250, 170, 300, 60];
+    const h = hues[i % hues.length];
+    return `hsl(${h} 72% 62%)`;
+  }
+
+  function drawRoll() {
+    const res = state.result;
+    if (!res) return;
+    const wrap = document.querySelector('.rollwrap');
+    const cssW = Math.max(560, wrap.clientWidth);
+    const zoom = parseFloat($('zoom').value) || 1;
+    const W = Math.round(cssW * zoom);
+
+    const lanes = [{ title: '输入（全部音符）', notes: state.info.notes, byChannel: true }]
+      .concat(res.tracks.map((t, i) => ({ title: t.name, notes: t.notes, color: laneColor(i) })));
+
+    let lo = 127, hi = 0;
+    state.info.notes.forEach(n => { if (n.pitch < lo) lo = n.pitch; if (n.pitch > hi) hi = n.pitch; });
+    if (hi - lo < 24) { const c = Math.round((lo + hi) / 2); lo = c - 12; hi = c + 12; }
+    lo -= 1; hi += 1;
+    const span = hi - lo;
+
+    const LANE_H = 74, GAP = 8, TOP = 22, LEFT = 96;
+    const H = TOP + lanes.length * (LANE_H + GAP) + 10;
+    const cv = $('roll');
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = W * dpr; cv.height = H * dpr;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    const ph = $('playhead');
+    ph.width = W * dpr; ph.height = H * dpr;
+    ph.style.width = W + 'px'; ph.style.height = H + 'px';
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    g.fillStyle = '#0b0f14'; g.fillRect(0, 0, W, H);
+
+    const total = Math.max(1, state.maxTick);
+    const plotW = W - LEFT - 12;
+    const sx = plotW / total;
+    const yOf = (p, top) => top + (hi - p) / span * LANE_H;
+
+    // 小节线
+    const tpb = res.clock.ticksPerBeat || 480;
+    const ts = (state.info.timeSigs && state.info.timeSigs[0]) || { num: 4, den: 2 };
+    const barTicks = tpb * ts.num * 4 / Math.pow(2, ts.den);
+    g.strokeStyle = '#1b2430'; g.lineWidth = 1;
+    for (let t = 0; t <= total; t += barTicks) {
+      const x = LEFT + t * sx;
+      g.beginPath(); g.moveTo(x, TOP - 6); g.lineTo(x, H - 8); g.stroke();
+    }
+
+    lanes.forEach((lane, li) => {
+      const top = TOP + li * (LANE_H + GAP);
+      g.fillStyle = '#111721';
+      g.fillRect(LEFT, top, plotW, LANE_H);
+      g.strokeStyle = '#232c38'; g.strokeRect(LEFT + .5, top + .5, plotW - 1, LANE_H - 1);
+
+      for (const n of lane.notes) {
+        const x = LEFT + n.start * sx;
+        const w = Math.max(1.6, (n.end - n.start) * sx);
+        const y = yOf(n.pitch, top);
+        const hh = Math.max(2, LANE_H / span * 0.86);
+        g.fillStyle = lane.byChannel
+          ? (n.ch === 9 ? 'hsl(20 60% 58%)' : `hsl(${(n.ch * 47 + 200) % 360} 60% 58%)`)
+          : lane.color;
+        const alpha = 0.45 + 0.55 * Math.min(1, (n.vel || 90) / 127);
+        g.globalAlpha = alpha;
+        g.fillRect(x, y - hh / 2, w, hh);
+        g.globalAlpha = 1;
+      }
+
+      g.fillStyle = '#8b98a5';
+      g.font = '11px -apple-system,"Segoe UI",sans-serif';
+      g.textBaseline = 'middle';
+      g.fillText(lane.title, 8, top + LANE_H / 2);
+      g.fillStyle = '#4b5764';
+      g.font = '10px -apple-system,sans-serif';
+      g.fillText(C.pitchName(hi - 1), 8, top + 8);
+      g.fillText(C.pitchName(lo + 1), 8, top + LANE_H - 8);
+    });
+
+    state.roll = { LEFT, plotW, sx, total, TOP, H, W, dpr };
+    drawPlayhead(player.playing ? player.position() : player.offset);
+  }
+
+  /* 播放头画在独立图层，避免每帧重绘整张卷帘 */
+  function drawPlayhead(sec) {
+    const r = state.roll;
+    if (!r || !state.result) return;
+    const ph = $('playhead');
+    const g = ph.getContext('2d');
+    g.setTransform(r.dpr, 0, 0, r.dpr, 0, 0);
+    g.clearRect(0, 0, r.W, r.H);
+    if (sec == null || sec < 0) return;
+    const tick = state.result.clock.toTicks(sec * 1000);
+    const x = r.LEFT + Math.min(r.total, tick) * r.sx;
+    g.fillStyle = 'rgba(255,255,255,.10)';
+    g.fillRect(x - 3, r.TOP - 6, 6, r.H - r.TOP);
+    g.fillStyle = '#ff7b7b';
+    g.fillRect(x - 1, r.TOP - 6, 2, r.H - r.TOP);
+    g.beginPath();
+    g.moveTo(x - 5, r.TOP - 10); g.lineTo(x + 5, r.TOP - 10); g.lineTo(x, r.TOP - 3);
+    g.closePath(); g.fill();
+  }
+
+  window.addEventListener('resize', () => { if (state.result) drawRoll(); });
+})();
+</script>
+</body>
+</html>

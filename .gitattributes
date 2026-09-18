@@ -1,0 +1,6 @@
+# 文本文件统一用 LF 换行，避免跨平台 diff 噪音
+* text=auto eol=lf
+
+# MIDI 是二进制，禁止任何转换
+*.mid  binary
+*.midi binary

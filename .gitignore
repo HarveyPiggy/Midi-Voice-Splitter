@@ -1,0 +1,10 @@
+# 单文件打包产物：由 node build-single.js 生成，建议作为 Release 附件发布
+dist/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log
