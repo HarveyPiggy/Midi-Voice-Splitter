@@ -505,6 +505,104 @@
     };
   }
 
+  /* =============================================================
+   * 3.5 单一输出音轨的再分离
+   *   场景：某个音轨虽然已经「单音」，但它其实是两条隐含旋律线交织而成
+   *        （典型：钢琴左右手交替、复调里的两个声部被并到一条轨）。
+   *   做法：先按「音程跳跃」与「时间间隔」找出乐句边界，
+   *        再按音高接近度把乐句重新归并到不同的隐含旋律线。
+   *   单音保证：每个音符只归属一条线；只有当多条线被强制合并时才可能重叠，
+   *             此时由 enforceGap 截断，结果与主流程一致。
+   *   opts: { leapSemitones, gapTicks, mergeSemitones, maxParts }
+   * ============================================================= */
+  function splitMonoTrack(notes, opts) {
+    const o = Object.assign({
+      leapSemitones: 12,   // 相邻音程超过此值 → 认为是换线，断开
+      gapTicks: 240,       // 相邻间隔超过此 tick → 断开
+      mergeSemitones: 6,   // 两个乐句首尾音高差小于此值才归为同一条线
+      maxParts: 8          // 最多拆成几条
+    }, opts || {});
+
+    const sorted = notes.map(n => ({
+      start: n.start, end: Math.max(n.end, n.start + 1),
+      pitch: n.pitch, vel: n.vel, ch: n.ch, track: n.track
+    })).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+
+    if (!sorted.length) return [];
+    if (sorted.length === 1) return [sorted];
+
+    // 1) 切乐句
+    const phrases = [];
+    let cur = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1], nt = sorted[i];
+      const leap = Math.abs(nt.pitch - prev.pitch);
+      const gap = nt.start - prev.end;
+      if (leap > o.leapSemitones || gap > o.gapTicks) {
+        phrases.push(cur); cur = [nt];
+      } else {
+        cur.push(nt);
+      }
+    }
+    phrases.push(cur);
+
+    // 2) 乐句归线：接回「时间不冲突且平均音高最接近」的那条。
+    //    用平均音高而不是首尾音高，否则同一条旋律线在乐句内起伏后会被误判成新线。
+    //    注意 tol 必须明显小于断开阈值，否则刚断开的乐句会被立刻并回去。
+    const tol = Math.max(0, Math.min(o.mergeSemitones, o.leapSemitones));
+    const parts = [];
+    const sumOf = arr => arr.reduce((s, n) => s + n.pitch, 0);
+    for (const ph of phrases) {
+      const head = ph[0], tail = ph[ph.length - 1];
+      const phSum = sumOf(ph);
+      const phAvg = phSum / ph.length;
+      let best = null, bestCost = Infinity;
+      for (const p of parts) {
+        if (p.lastEnd > head.start) continue;           // 时间上接不上，跳过
+        const c = Math.abs(phAvg - (p.sum / p.count));
+        if (c < bestCost) { bestCost = c; best = p; }
+      }
+      if (best && bestCost <= tol) {
+        best.notes = best.notes.concat(ph);
+        best.sum += phSum; best.count += ph.length;
+        best.lastPitch = tail.pitch;
+        best.lastEnd = tail.end;
+      } else {
+        parts.push({
+          notes: ph.slice(), sum: phSum, count: ph.length,
+          lastPitch: tail.pitch, lastEnd: tail.end
+        });
+      }
+    }
+
+    // 3) 超出上限：反复合并平均音高最接近的两条
+    let guard = 0;
+    while (parts.length > Math.max(1, o.maxParts) && guard++ < 200) {
+      let bi = 0, bj = 1, bc = Infinity;
+      for (let i = 0; i < parts.length; i++) {
+        for (let j = i + 1; j < parts.length; j++) {
+          const c = Math.abs(avgPitch(parts[i].notes) - avgPitch(parts[j].notes));
+          if (c < bc) { bc = c; bi = i; bj = j; }
+        }
+      }
+      const merged = enforceGap(parts[bi].notes.concat(parts[bj].notes), 0, 1);
+      const mSum = merged.reduce((s, n) => s + n.pitch, 0);
+      parts[bi] = {
+        notes: merged, sum: mSum, count: merged.length,
+        lastPitch: merged.length ? merged[merged.length - 1].pitch : parts[bi].lastPitch,
+        lastEnd: merged.length ? merged[merged.length - 1].end : parts[bi].lastEnd
+      };
+      parts.splice(bj, 1);
+    }
+
+    // 4) 整理输出：高声部在前，单音化兜底
+    parts.forEach(p => {
+      p.notes = enforceGap(p.notes, 0, 1).sort((a, b) => a.start - b.start);
+    });
+    parts.sort((a, b) => avgPitch(b.notes) - avgPitch(a.notes));
+    return parts.map(p => p.notes).filter(a => a.length);
+  }
+
   /* 校验：同一音轨内是否任意时刻只有一个音符 */
   function checkMono(notes) {
     const s = notes.slice().sort((a, b) => a.start - b.start);
@@ -675,7 +773,7 @@
 
   const API = {
     GM_NAMES, NOTE_NAMES, pitchName,
-    parseMidi, extractNotes, makeClock, separate, checkMono, maxConcurrent,
+    parseMidi, extractNotes, makeClock, separate, splitMonoTrack, checkMono, maxConcurrent,
     buildMidi, buildMidiSingleTrack, generateDemo, enforceGap
   };
 
