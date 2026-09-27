@@ -168,7 +168,8 @@
   .rollwrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:#fff}
   canvas{display:block}
   .rollinner{position:relative;display:inline-block;vertical-align:top}
-  #playhead{position:absolute;left:0;top:0;pointer-events:none}
+  /* 播放头图层同时承担「点击/拖动跳转」的命中区 */
+  #playhead{position:absolute;left:0;top:0;pointer-events:auto;cursor:ew-resize;touch-action:none}
 
   /* ---------- 表格 ---------- */
   .tablewrap{border:1px solid var(--line);border-radius:var(--r);overflow-x:auto;background:#fff}
@@ -181,6 +182,10 @@
   .mono-ok{color:var(--ok);font-weight:600}
   .mono-bad{color:var(--err);font-weight:600}
   .dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:7px;vertical-align:middle}
+  .tname{cursor:text;border-bottom:1px dashed transparent;padding-bottom:1px}
+  .tname:hover{border-bottom-color:var(--line-2);color:var(--brand-deep)}
+  input.rename{width:160px;padding:3px 7px;font-size:13px;font-family:inherit;
+    border:1px solid var(--brand);border-radius:7px;outline:none;background:#fff;color:var(--ink)}
   .tag{font-size:11px;color:var(--muted);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px;margin-left:4px}
   .tag.hi{color:var(--brand-deep);border-color:var(--brand-l);background:var(--brand-ll)}
   .mbtn{border:1px solid var(--line-2);background:#fff;color:var(--muted);border-radius:8px;
@@ -361,7 +366,7 @@
     </div>
 
     <div class="toolbar">
-      <div class="tl">钢琴卷帘：第一行为输入（按通道着色），其余为输出的每个音轨</div>
+      <div class="tl">钢琴卷帘：第一行为输入（按通道着色），其余为输出的每个音轨 — 在卷帘上点击或左右拖动可跳转进度</div>
       <div class="tr">
         <label class="lb" style="margin:0" for="zoom">横向缩放</label>
         <input type="range" id="zoom" min="1" max="10" step="0.5" value="1" style="width:130px">
@@ -404,7 +409,7 @@
   const S = window.Synth;
   const $ = id => document.getElementById(id);
 
-  const state = { fileName:null, info:null, result:null, midiBytes:null, maxTick:0, roll:null, seeking:false };
+  const state = { fileName:null, info:null, result:null, midiBytes:null, maxTick:0, roll:null, seekTouchAt:0 };
 
   /* ---------- 播放器 ---------- */
   const engine = new S.SynthEngine();
@@ -508,14 +513,7 @@
   /* 把结果写回界面：统计 / 表格 / 卷帘 / 试听素材 / 导出文件 */
   function finalize(res) {
     state.result = res;
-    state.midiBytes = C.buildMidi({
-      division: state.info.division,
-      tempos: state.info.tempos,
-      timeSigs: state.info.timeSigs,
-      keySigs: state.info.keySigs,
-      tracks: res.tracks.map(t => ({ name:t.name, ch:t.ch, program:t.program, notes:t.notes, drum:t.drum }))
-    });
-
+    state.midiBytes = buildBytes(res);
     $('resultCard').style.display = 'block';
     $('emptyCard').style.display = 'none';
     recomputeStats(res);
@@ -530,6 +528,17 @@
     $('tpos').textContent = '0:00';
     $('seek').value = '0';
     drawPlayhead(-1);
+  }
+
+  /* 用当前音轨（含改名）重新生成导出用的 MIDI 字节 */
+  function buildBytes(res) {
+    return C.buildMidi({
+      division: state.info.division,
+      tempos: state.info.tempos,
+      timeSigs: state.info.timeSigs,
+      keySigs: state.info.keySigs,
+      tracks: res.tracks.map(t => ({ name:t.name, ch:t.ch, program:t.program, notes:t.notes, drum:t.drum }))
+    });
   }
 
   function recomputeStats(res) {
@@ -611,7 +620,7 @@
       }
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td><span class="dot" style="background:${color}"></span>${escapeHtml(t.name)} ${tag}</td>
+        <td><span class="dot" style="background:${color}"></span><span class="tname" data-i="${i}" title="点击重命名">${escapeHtml(t.name)}</span> ${tag}</td>
         <td>${t.ch + 1}</td>
         <td>${escapeHtml(inst)}</td>
         <td>${t.notes.length}</td>
@@ -650,7 +659,52 @@
         }
       };
     });
+    tb.querySelectorAll('.tname').forEach(sp => {
+      sp.onclick = () => startRename(+sp.dataset.i, sp);
+    });
     syncTrackBtns();
+  }
+
+  /* ---------- 音轨重命名 ---------- */
+  function startRename(i, span) {
+    const res = state.result;
+    if (!res || !res.tracks[i]) return;
+    const old = res.tracks[i].name;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'rename';
+    input.value = old;
+    input.maxLength = 60;
+    input.setAttribute('aria-label', '音轨名称');
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = commit => {
+      if (done) return;
+      done = true;
+      const v = input.value;
+      input.replaceWith(span);
+      if (commit) renameTrack(i, v);
+    };
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+  }
+
+  function renameTrack(i, rawName) {
+    const res = state.result;
+    if (!res || !res.tracks[i]) return;
+    const t = res.tracks[i];
+    const name = String(rawName || '').trim().slice(0, 60);
+    if (!name || name === t.name) { renderTable(res); return; }
+    t.name = name;
+    state.midiBytes = buildBytes(res);   // 导出文件名与音轨名跟着变
+    renderTable(res);
+    drawRoll();
   }
 
   function syncTrackBtns() {
@@ -757,6 +811,10 @@
   /* ---------- 走带控件 ---------- */
   $('pp').onclick = () => {
     try { engine.ensure(); } catch (e) { showBanner('err', '无法启动音频：' + e.message); return; }
+    if (!player.playing && engine.ctx && engine.ctx.state !== 'running') {
+      try { engine.ctx.resume(); } catch (e) { }
+      showBanner('warn', '音频上下文未启动（浏览器可能拦截了自动播放）。若听不到声音，请再点一次播放；进度条不受影响。');
+    }
     player.playing ? player.pause() : player.play();
   };
   $('stopBtn').onclick = () => player.stop();
@@ -772,30 +830,96 @@
     player.idx = player._seekIndex(pos);
     if (was) player.play();
   };
+  /* 用户最近一次手动拖动进度的时间戳：用它代替布尔量，
+     这样即使缺少 change / pointerup 事件也不会把进度条永久锁死 */
+  function markSeekTouch() { state.seekTouchAt = (window.performance && performance.now) ? performance.now() : Date.now(); }
+  function seekFresh() {
+    const now = (window.performance && performance.now) ? performance.now() : Date.now();
+    return now - (state.seekTouchAt || 0) < 250;
+  }
+
+  /* 只更新视觉（时间文字 / 滑块 / 播放头），不打断播放 */
+  function previewSeek(sec) {
+    if (!state.result || !player.dur) return;
+    const p = Math.min(player.dur, Math.max(0, sec));
+    $('tpos').textContent = fmtTime(p);
+    $('seek').value = String(Math.round(p / player.dur * 1000));
+    drawPlayhead(p);
+  }
+
   $('seek').oninput = () => {
-    state.seeking = true;
+    markSeekTouch();
     const p = (parseFloat($('seek').value) / 1000) * player.dur;
     $('tpos').textContent = fmtTime(p);
     if (state.result) drawPlayhead(p);
   };
   $('seek').onchange = () => {
-    const p = (parseFloat($('seek').value) / 1000) * player.dur;
-    player.seek(p);
-    setTimeout(() => { state.seeking = false; }, 60);
+    markSeekTouch();
+    player.seek((parseFloat($('seek').value) / 1000) * player.dur);
   };
 
-  /* 播放中更新进度条与播放头 */
-  (function loopUI() {
-    if (player.playing) {
+  /* ---------- 在钢琴卷帘上点击 / 拖动跳转 ---------- */
+  let rollDrag = false, rollHover = null;
+
+  function rollSecAt(clientX) {
+    const r = state.roll;
+    if (!r || !state.result) return null;
+    const rect = $('playhead').getBoundingClientRect();
+    const w = rect.width || r.W;
+    const cssX = (clientX - rect.left) * (r.W / w);
+    const tick = Math.max(0, Math.min(r.total, (cssX - r.LEFT) / r.sx));
+    return state.result.clock.toMs(tick) / 1000;
+  }
+
+  const phEl = $('playhead');
+  phEl.addEventListener('pointerdown', e => {
+    const sec = rollSecAt(e.clientX);
+    if (sec == null) return;
+    rollDrag = true; rollHover = null;
+    try { phEl.setPointerCapture(e.pointerId); } catch (err) { }
+    markSeekTouch();
+    previewSeek(sec);
+    e.preventDefault();
+  });
+  phEl.addEventListener('pointermove', e => {
+    const sec = rollSecAt(e.clientX);
+    if (sec == null) return;
+    if (rollDrag) { markSeekTouch(); previewSeek(sec); }
+    else { rollHover = sec; drawPlayhead(player.playing ? player.position() : player.offset); }
+  });
+  phEl.addEventListener('pointerup', e => {
+    if (!rollDrag) return;
+    rollDrag = false;
+    try { phEl.releasePointerCapture(e.pointerId); } catch (err) { }
+    const sec = rollSecAt(e.clientX);
+    if (sec != null) { markSeekTouch(); player.seek(sec); previewSeek(sec); }
+  });
+  phEl.addEventListener('pointercancel', () => { rollDrag = false; });
+  phEl.addEventListener('pointerleave', () => {
+    if (rollDrag) return;
+    rollHover = null;
+    drawPlayhead(player.playing ? player.position() : player.offset);
+  });
+
+  /* ---------- 播放中更新进度条与播放头 ---------- */
+  function loopUI() {
+    if (player.playing && !rollDrag) {
       /* 钳位到 [0, dur]：AudioContext 时钟未对齐时 position() 可能为负，避免出现 -1:-1 */
       const p = Math.min(player.dur, Math.max(0, player.position()));
-      if (!state.seeking) $('seek').value = String(Math.round(p / player.dur * 1000));
+      if (!seekFresh()) $('seek').value = String(Math.round(p / player.dur * 1000));
       $('tpos').textContent = fmtTime(p);
       drawPlayhead(p);
     }
+    scheduleUI();
+  }
+  /* 单帧异常不能把整条循环打断（否则进度条会彻底冻住） */
+  function scheduleUI() {
     const raf = window.requestAnimationFrame;
-    if (raf) raf(loopUI); else setTimeout(loopUI, 80);
-  })();
+    const next = () => { try { loopUI(); } catch (err) { scheduleUI(); } };
+    if (raf && !document.hidden) raf.call(window, next);
+    else setTimeout(next, 60);
+  }
+  scheduleUI();
 
   $('dlAll').onclick = () => {
     if (state.midiBytes) save(state.midiBytes, baseName() + '_split.mid');
@@ -911,6 +1035,14 @@
     const g = ph.getContext('2d');
     g.setTransform(r.dpr, 0, 0, r.dpr, 0, 0);
     g.clearRect(0, 0, r.W, r.H);
+
+    /* 鼠标悬停位置的预览竖线（提示这里可以点/拖） */
+    if (rollHover != null && !rollDrag) {
+      const hx = r.LEFT + Math.min(r.total, state.result.clock.toTicks(rollHover * 1000)) * r.sx;
+      g.fillStyle = 'rgba(23,117,109,.22)';
+      g.fillRect(hx, r.TOP - 6, 1, r.H - r.TOP);
+    }
+
     if (sec == null || sec < 0) return;
     const tick = state.result.clock.toTicks(sec * 1000);
     const x = r.LEFT + Math.min(r.total, tick) * r.sx;

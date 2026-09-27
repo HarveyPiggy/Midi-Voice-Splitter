@@ -7,6 +7,11 @@
 (function (global) {
   'use strict';
 
+  /* 墙钟：进度条/播放头的兜底时钟（音频时钟可能被浏览器挂起而不推进） */
+  const nowMs = typeof performance !== 'undefined' && performance.now
+    ? () => performance.now()
+    : () => Date.now();
+
   /* ---------- 生成用的缓冲（混响 IR / 白噪声） ---------- */
   function makeIR(ctx, sec, decay) {
     const len = Math.max(1, Math.floor(ctx.sampleRate * sec));
@@ -247,6 +252,9 @@
       this.offset = 0;
       this.playing = false;
       this.startCtx = 0;
+      this.startWall = 0;      // 起播时的墙钟（进度条兜底）
+      this._lastCtx = 0;       // 最近一次观察到的音频时钟
+      this._lastCtxAt = 0;     // 观察到它推进的墙钟时刻
       this.timer = null;
       this.loop = false;
       this.rate = 1;
@@ -281,9 +289,21 @@
       if (this.solo.size) return this.solo.has(i);
       return true;
     }
+    /* 播放位置（秒）。
+     * 以音频时钟为准；但音频时钟可能因为「上下文被挂起 / 没有音频输出设备 /
+     * 自动播放限制」而完全不推进，此时进度条会整个冻住 —— 所以加墙钟兜底。 */
     position() {
-      if (!this.playing || !this.e.ctx) return this.offset;
-      return (this.e.ctx.currentTime - this.startCtx) * this.rate + this.offset;
+      if (!this.playing) return this.offset;
+      const wall = (nowMs() - this.startWall) / 1000 * this.rate + this.offset;
+      const ctx = this.e.ctx;
+      if (!ctx) return wall;
+
+      const t = ctx.currentTime;
+      if (t > this._lastCtx) { this._lastCtx = t; this._lastCtxAt = nowMs(); }
+      const fresh = nowMs() - this._lastCtxAt;
+      const stalled = ctx.state !== 'running' || fresh > 400 ||
+        ((nowMs() - this.startWall) > 250 && t <= this.startCtx);
+      return stalled ? wall : (t - this.startCtx) * this.rate + this.offset;
     }
     _seekIndex(sec) {
       let i = 0;
@@ -296,6 +316,9 @@
       const ctx = this.e.ensure();
       this.idx = this._seekIndex(this.offset);
       this.startCtx = ctx.currentTime + 0.08;
+      this.startWall = nowMs();
+      this._lastCtx = ctx.currentTime;
+      this._lastCtxAt = nowMs();
       this.playing = true;
       this._tick();
       this.timer = setInterval(() => this._tick(), 25);
